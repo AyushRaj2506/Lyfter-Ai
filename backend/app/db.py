@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS messages (
     CHECK((role = 'assistant' AND metadata IS NOT NULL) OR (role = 'user' AND metadata IS NULL))
 );
 CREATE INDEX IF NOT EXISTS messages_session_id_id ON messages(session_id, id);
+CREATE TABLE IF NOT EXISTS chat_requests (
+    session_id TEXT NOT NULL REFERENCES sessions(session_id),
+    request_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    reply_id INTEGER NOT NULL REFERENCES messages(id),
+    PRIMARY KEY (session_id, request_id)
+);
 """
 
 
@@ -94,7 +101,8 @@ class Database:
         return (session["system_prompt"] if session else None), [dict(row) for row in reversed(rows)]
 
     def save_turn(
-        self, session_id: str, system_prompt: str, message: str, reply: str, metadata: Metadata
+        self, session_id: str, system_prompt: str, message: str, reply: str, metadata: Metadata,
+        *, request_identity: tuple[str, str] | None = None,
     ) -> None:
         created_at = datetime.now(timezone.utc).isoformat()
         with self.connect() as connection:
@@ -107,13 +115,36 @@ class Database:
                 """,
                 (session_id, system_prompt, created_at, created_at),
             )
-            connection.executemany(
+            connection.execute(
                 "INSERT INTO messages(session_id, role, content, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
-                (
-                    (session_id, "user", message, None, created_at),
-                    (session_id, "assistant", reply, metadata.model_dump_json(), created_at),
-                ),
+                (session_id, "user", message, None, created_at),
             )
+            assistant = connection.execute(
+                "INSERT INTO messages(session_id, role, content, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+                (session_id, "assistant", reply, metadata.model_dump_json(), created_at),
+            )
+            if request_identity is not None:
+                request_id, fingerprint = request_identity
+                connection.execute(
+                    "INSERT INTO chat_requests(session_id, request_id, fingerprint, reply_id) VALUES (?, ?, ?, ?)",
+                    (session_id, request_id, fingerprint, assistant.lastrowid),
+                )
+
+    def saved_reply(self, session_id: str, request_id: str) -> tuple[str, AssistantMessage] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT chat_requests.fingerprint, messages.content, messages.metadata
+                FROM chat_requests JOIN messages ON messages.id = chat_requests.reply_id
+                WHERE chat_requests.session_id = ? AND chat_requests.request_id = ?
+                """,
+                (session_id, request_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return row["fingerprint"], AssistantMessage(
+            role="assistant", content=row["content"], metadata=Metadata.model_validate_json(row["metadata"]),
+        )
 
     def history(self, session_id: str) -> list[UserMessage | AssistantMessage]:
         with self.connect() as connection:

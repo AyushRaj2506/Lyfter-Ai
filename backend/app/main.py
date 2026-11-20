@@ -1,6 +1,8 @@
+import json
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
+from hashlib import sha256
 from time import perf_counter
 from typing import Annotated
 
@@ -125,6 +127,9 @@ def create_app(settings: Settings | None = None, completion: Completion | None =
         data: ChatRequest,
         request: Request,
         x_simulate_failure: Annotated[str | None, Header(alias="X-Simulate-Failure")] = None,
+        request_id: Annotated[
+            str | None, Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+        ] = None,
     ) -> ChatResponse:
         started = perf_counter()
         simulation = (
@@ -132,6 +137,19 @@ def create_app(settings: Settings | None = None, completion: Completion | None =
             if settings.enable_failure_simulation else {}
         )
         with locks.hold(data.session_id):
+            request_identity = None
+            if request_id is not None:
+                payload = json.dumps([data.message, data.system_prompt, simulation], sort_keys=True)
+                fingerprint = sha256(payload.encode()).hexdigest()
+                request_identity = (request_id, fingerprint)
+                saved = db.saved_reply(data.session_id, request_id)
+                if saved is not None:
+                    saved_fingerprint, reply = saved
+                    if saved_fingerprint != fingerprint:
+                        raise HTTPException(status_code=409, detail="idempotency key already used for another request")
+                    request.state.metadata = reply.metadata
+                    return ChatResponse(session_id=data.session_id, reply=reply.content, metadata=reply.metadata)
+
             stored_prompt, history = db.context(data.session_id, settings.max_history_messages)
             system_prompt = data.system_prompt or stored_prompt or settings.default_system_prompt
             messages = [
@@ -154,7 +172,9 @@ def create_app(settings: Settings | None = None, completion: Completion | None =
                 key_id=result.key_id,
                 fallback_attempts=result.fallback_attempts,
             )
-            db.save_turn(data.session_id, system_prompt, data.message, result.reply, metadata)
+            db.save_turn(
+                data.session_id, system_prompt, data.message, result.reply, metadata, request_identity=request_identity,
+            )
         request.state.metadata = metadata
         return ChatResponse(session_id=data.session_id, reply=result.reply, metadata=metadata)
 
