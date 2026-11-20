@@ -4,7 +4,14 @@ React and FastAPI chatbot with per-session SQLite history, ordered LiteLLM key f
 
 ## 1. Live URLs
 
-Public repository is [AyushRaj2506/Lyfter-Ai](https://github.com/AyushRaj2506/Lyfter-Ai). Frontend, backend, and demo video links are pending.
+| Deliverable | URL |
+| --- | --- |
+| Frontend | [lyfter-ai.vercel.app](https://lyfter-ai.vercel.app/) |
+| Backend health | [lyftr-chat-api.onrender.com/health](https://lyftr-chat-api.onrender.com/health) |
+| Interactive API docs | [lyftr-chat-api.onrender.com/docs](https://lyftr-chat-api.onrender.com/docs) |
+| Public repository | [AyushRaj2506/Lyfter-Ai](https://github.com/AyushRaj2506/Lyfter-Ai) |
+
+Open the backend health URL before the demo to wake the free Render instance. Its SQLite file is ephemeral across service restarts. The local Docker volume preserves history across restarts. [Render free-instance limits](https://render.com/docs/free)
 
 | Local service | URL |
 | --- | --- |
@@ -51,7 +58,7 @@ cd backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --no-access-log
 ```
 
-In another terminal from the repository root, run:
+Start the frontend in a second terminal from the repository root.
 
 ```sh
 cd frontend
@@ -70,7 +77,7 @@ Open [localhost:5173](http://localhost:5173). To set a different backend URL, ex
 
 ## 4. Verification (how to see failover, cache hits and per-message token usage)
 
-From the repository root with the backend dependencies installed:
+Run these checks from the repository root after installing the backend dependencies.
 
 ```sh
 python -m pytest -q backend
@@ -79,14 +86,20 @@ python backend/litellm_spike.py --live
 python scripts/verify_contract.py http://localhost:8000 --origin http://localhost:3000
 ```
 
-The first probe uses LiteLLM's test response. The live probe sends requests to Gemini with the configured keys. The HTTP verification script checks health, CORS, exact cache hits, per-request usage, failover, 422 and 503 responses, and multi-turn persistence. Run it again with the public backend URL and public frontend origin after deploying.
+The first probe uses LiteLLM's test response. The live probe sends requests to Gemini with the configured keys. The HTTP verification script checks health, CORS, exact cache hits, per-request usage, failover, 422 and 503 responses, and multi-turn persistence.
+
+```sh
+python scripts/verify_contract.py https://lyftr-chat-api.onrender.com --origin https://lyfter-ai.vercel.app
+```
+
+The clean-checkout workflow runs the backend tests, builds and starts both containers, checks the 503 response, and verifies history survives `make down` followed by `make up`. [GitHub Actions](https://github.com/AyushRaj2506/Lyfter-Ai/actions)
 
 ### Demo sequence for a 2–3 minute recording
 
 1. Open the deployed frontend and show `GET /health` in the API docs. Send a fresh first message and point out `LIVE_INFERENCE`, latency and input/output token usage.
 2. Start a new chat and send the exact same first message. Show `LLM_CACHE`, identical text and token counts, and the new latency. Continue the conversation, click the session badge to copy its ID, and use it in `GET /sessions/{session_id}/messages`.
 3. Select **Key 1 · Rate limit (429)** under **Simulate failure** and send a message. Point out `key_2`, one fallback, and a normal reply. Use `POST /chat` in the API docs to show the `X-Simulate-Failure` header, then send `*=429` to demonstrate the 503. Get the history again to confirm the failed turn is absent.
-4. Add the verified public links and the narrated recording to the assignment form.
+4. Add the verified public links and the narrated recording to the [assignment submission form](https://docs.google.com/forms/d/e/1FAIpQLSfaPS5_NliZuEjhYXppeafBrNM9u0hp-q-vT8vDuv9GU-0THA/viewform).
 
 ## 5. Setup Used (editor and AI tools)
 
