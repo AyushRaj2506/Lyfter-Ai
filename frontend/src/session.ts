@@ -1,5 +1,5 @@
-export function createSessionId() {
-  if (globalThis.crypto?.randomUUID) return `s-${globalThis.crypto.randomUUID()}`
+export function createRandomId(prefix: 's' | 'r') {
+  if (globalThis.crypto?.randomUUID) return `${prefix}-${globalThis.crypto.randomUUID()}`
 
   const bytes = new Uint8Array(16)
   if (globalThis.crypto?.getRandomValues) {
@@ -9,5 +9,5 @@ export function createSessionId() {
       bytes[index] = Math.floor(Math.random() * 256)
     }
   }
-  return `s-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`
+  return `${prefix}-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`
 }

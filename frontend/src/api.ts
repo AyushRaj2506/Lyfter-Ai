@@ -20,6 +20,14 @@ type ChatRequest = {
   system_prompt?: string
 }
 
+export type ChatTurn = {
+  request: ChatRequest
+  requestId: string
+  simulation: string
+}
+
+export class UnconfirmedDeliveryError extends Error {}
+
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000')
   .trim()
   .replace(/\/+$/, '')
@@ -33,8 +41,11 @@ export async function checkHealth(signal: AbortSignal) {
     : null
 }
 
-export async function sendChat(request: ChatRequest, simulation: string): Promise<ChatResponse> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+export async function sendChat({ request, requestId, simulation }: ChatTurn): Promise<ChatResponse> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Idempotency-Key': requestId,
+  }
   if (simulation) headers['X-Simulate-Failure'] = simulation
 
   let response: Response
@@ -45,28 +56,26 @@ export async function sendChat(request: ChatRequest, simulation: string): Promis
       body: JSON.stringify(request),
     })
   } catch {
-    throw new Error('Could not reach the chat server. Please try again.')
+    throw new UnconfirmedDeliveryError('The connection dropped before the reply arrived.')
   }
 
-  if (response.status === 503) {
+  const result = await response.json().catch(() => null)
+  if (response.status === 503 && result?.detail === 'all providers unavailable') {
     throw new Error('All providers are unavailable. Please try again in a moment.')
   }
 
   if (response.status === 422) {
-    const error = await response.json().catch(() => null)
-    const field = Array.isArray(error?.detail) ? error.detail[0]?.loc?.at(-1) : null
+    const field = Array.isArray(result?.detail) ? result.detail[0]?.loc?.at(-1) : null
     if (field === 'message') throw new Error('Enter a message of 1 to 4,000 characters.')
     if (field === 'system_prompt') throw new Error('Use up to 10,000 characters in the system prompt.')
     if (field === 'session_id') throw new Error('Start a new chat and try again.')
     throw new Error('The server could not read this message. Please try again.')
   }
 
+  if (response.status >= 500) throw new UnconfirmedDeliveryError('The server did not confirm your reply.')
   if (!response.ok) throw new Error('The chat server could not send a reply. Please try again.')
-  const result: ChatResponse = await response.json().catch(() => {
-    throw new Error('The chat server returned an unreadable reply.')
-  })
   if (result?.session_id !== request.session_id || !result.metadata || typeof result.reply !== 'string') {
-    throw new Error('The chat server returned an incomplete reply.')
+    throw new UnconfirmedDeliveryError('The chat server returned an incomplete reply.')
   }
   return result
 }

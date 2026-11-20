@@ -1,12 +1,13 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { checkHealth, sendChat, type Metadata } from './api'
-import { createSessionId } from './session'
+import { sendChat, UnconfirmedDeliveryError, type ChatTurn, type Metadata } from './api'
+import { createRandomId } from './session'
+import { useApiHealth } from './useApiHealth'
 
 type Message = { id: number; text: string } & (
   | { role: 'user' }
-  | { role: 'error'; failedDraft?: string }
+  | { role: 'error'; failedDraft: string; retryTurn?: ChatTurn }
   | { role: 'assistant'; metadata: Metadata }
 )
 
@@ -77,7 +78,11 @@ const ReplyBody = memo(function ReplyBody({ text }: { text: string }) {
   )
 })
 
-function ConversationMessage({ message, editDraft }: { message: Message; editDraft?: (text: string) => void }) {
+function ConversationMessage({ message, editDraft, onRetry }: {
+  message: Message
+  editDraft?: (text: string) => void
+  onRetry?: () => void
+}) {
   if (message.role === 'user') {
     return (
       <article className="message user-message" aria-label="Your message" data-testid="user-message">
@@ -91,8 +96,11 @@ function ConversationMessage({ message, editDraft }: { message: Message; editDra
       <aside className="error-message" role="alert" data-testid="error-message">
         <span className="error-icon" aria-hidden="true">!</span>
         <span className="error-text">{message.text}</span>
-        {failedDraft && editDraft && (
-          <button type="button" className="edit-message" onClick={() => editDraft(failedDraft)}>
+        {onRetry && (
+          <button type="button" className="error-action" onClick={onRetry}>Retry</button>
+        )}
+        {!message.retryTurn && editDraft && (
+          <button type="button" className="error-action" onClick={() => editDraft(failedDraft)}>
             Edit message
           </button>
         )}
@@ -113,7 +121,7 @@ function ConversationMessage({ message, editDraft }: { message: Message; editDra
 }
 
 export function App() {
-  const [sessionId, setSessionId] = useState(createSessionId)
+  const [sessionId, setSessionId] = useState(() => createRandomId('s'))
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
   const [emptyHint, setEmptyHint] = useState(false)
@@ -121,7 +129,7 @@ export function App() {
   const [savedPrompt, setSavedPrompt] = useState('')
   const [simulation, setSimulation] = useState('')
   const [pending, setPending] = useState(false)
-  const [keyCount, setKeyCount] = useState<number | null | undefined>(undefined)
+  const keyCount = useApiHealth()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sessionCopied, setSessionCopied] = useState(false)
   const editor = useRef<HTMLTextAreaElement>(null)
@@ -130,19 +138,8 @@ export function App() {
   const inFlight = useRef(false)
   const messageId = useRef(0)
   const characterCount = Array.from(draft.trim()).length
-
-  useEffect(() => {
-    const controller = new AbortController()
-    let retry: number
-    async function refreshHealth() {
-      const count = await checkHealth(controller.signal).catch(() => null)
-      if (controller.signal.aborted) return
-      setKeyCount(count)
-      if (count === null) retry = window.setTimeout(refreshHealth, 15000)
-    }
-    void refreshHealth()
-    return () => { controller.abort(); window.clearTimeout(retry) }
-  }, [])
+  const lastMessage = messages.at(-1)
+  const retryTurn = lastMessage?.role === 'error' ? lastMessage.retryTurn : undefined
 
   useEffect(() => {
     const area = scrollArea.current
@@ -153,7 +150,7 @@ export function App() {
 
   function startNewChat() {
     if (inFlight.current) return
-    setSessionId(createSessionId())
+    setSessionId(createRandomId('s'))
     setMessages([])
     setDraft('')
     setEmptyHint(false)
@@ -181,13 +178,8 @@ export function App() {
     editor.current?.focus()
   }
 
-  function showError(text: string, failedDraft?: string) {
-    const id = ++messageId.current
-    setMessages((current) => [...current, { id, role: 'error', text, failedDraft }])
-  }
-
-  async function submit() {
-    if (inFlight.current) return
+  function submit() {
+    if (inFlight.current || retryTurn) return
     const text = draft.trim()
     if (!text) {
       setEmptyHint(true)
@@ -195,23 +187,33 @@ export function App() {
       return
     }
 
-    following.current = true
     setDraft('')
     setEmptyHint(false)
-    inFlight.current = true
-    setPending(true)
     setSimulation('')
     const id = ++messageId.current
     setMessages((current) => [...current, { id, role: 'user', text }])
 
-    try {
-      const request = {
+    void deliver({
+      requestId: createRandomId('r'),
+      request: {
         session_id: sessionId,
         message: text,
         ...(systemPrompt.trim() ? { system_prompt: systemPrompt } : {}),
-      }
-      const response = await sendChat(request, simulation)
-      if (systemPrompt.trim()) setSavedPrompt(systemPrompt)
+      },
+      simulation,
+    })
+  }
+
+  async function deliver(turn: ChatTurn, errorId?: number) {
+    if (inFlight.current) return
+    following.current = true
+    inFlight.current = true
+    setPending(true)
+    if (errorId !== undefined) setMessages((current) => current.filter((message) => message.id !== errorId))
+
+    try {
+      const response = await sendChat(turn)
+      if (turn.request.system_prompt) setSavedPrompt(turn.request.system_prompt)
       const replyId = ++messageId.current
       setMessages((current) => [...current, {
         id: replyId,
@@ -220,7 +222,14 @@ export function App() {
         metadata: response.metadata,
       }])
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'The message could not be sent.', text)
+      const id = ++messageId.current
+      setMessages((current) => [...current, {
+        id,
+        role: 'error',
+        text: error instanceof Error ? error.message : 'The message could not be sent.',
+        failedDraft: turn.request.message,
+        retryTurn: error instanceof UnconfirmedDeliveryError ? turn : undefined,
+      }])
     } finally {
       inFlight.current = false
       setPending(false)
@@ -329,14 +338,19 @@ export function App() {
           ) : (
             <section className="conversation" role="log" aria-label="Conversation messages" aria-live="polite">
               {messages.map((message) => (
-                <ConversationMessage key={message.id} message={message} editDraft={!draft && !pending ? editDraft : undefined} />
+                <ConversationMessage
+                  key={message.id}
+                  message={message}
+                  editDraft={!draft && !pending && !retryTurn ? editDraft : undefined}
+                  onRetry={retryTurn && message.id === lastMessage?.id ? () => void deliver(retryTurn, message.id) : undefined}
+                />
               ))}
               {pending && <p className="typing" data-testid="typing-indicator">Waiting for a reply…</p>}
             </section>
           )}
         </div>
 
-        <form className="composer" onSubmit={(event) => { event.preventDefault(); void submit() }}>
+        <form className="composer" onSubmit={(event) => { event.preventDefault(); submit() }}>
           <label className="sr-only" htmlFor="chat-message">Message</label>
           <div className="composer-box">
             <textarea
@@ -355,17 +369,23 @@ export function App() {
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing
                   && event.nativeEvent.keyCode !== 229) {
                   event.preventDefault()
-                  void submit()
+                  submit()
                 }
               }}
             />
-            <button className="primary-button send-button" data-testid="send-button" type="submit" disabled={pending || characterCount === 0}>
+            <button
+              className="primary-button send-button"
+              data-testid="send-button"
+              type="submit"
+              disabled={pending || Boolean(retryTurn) || characterCount === 0}
+            >
               Send <span aria-hidden="true">↑</span>
             </button>
           </div>
           <div className="composer-hint">
             <span id="composer-hint" className={emptyHint ? 'over-limit' : undefined} aria-live="polite">
-              {emptyHint ? 'Enter a message to send.' : 'Enter to send · Shift + Enter for a new line'}
+              {retryTurn ? 'Retry the previous message or start a new chat.' : emptyHint
+                ? 'Enter a message to send.' : 'Enter to send · Shift + Enter for a new line'}
             </span>
             <span id="character-count" className={characterCount > 4000 ? 'over-limit' : ''}>
               {characterCount.toLocaleString('en-US')} / 4,000

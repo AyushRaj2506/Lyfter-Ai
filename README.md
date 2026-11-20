@@ -74,6 +74,7 @@ Open [localhost:5173](http://localhost:5173). To set a different backend URL, ex
 - **Caching.** LiteLLM's exact-match local cache is enabled by default. The key uses the configured model and the exact message list, including the system prompt and history. A hit returns the cached text and usage, sets a null key ID and zero fallbacks, and measures fresh server latency. Simulated requests bypass reads so a cache hit cannot hide a key failure. Use `CACHE_TYPE=disk` to retain cache entries across restarts on a persistent volume. [LiteLLM caching](https://docs.litellm.ai/docs/proxy/caching)
 - **Session storage.** The browser generates a fresh session ID on page load and sends only new messages. The API reconstructs the model context with the stored system prompt and up to `MAX_HISTORY_MESSAGES` recent messages. SQLite keeps the full successful history. The system prompt and both messages are committed together after a successful reply. An unwritable configured SQLite location falls back to temporary storage and logs an error. A single Uvicorn worker keeps the in-memory cache and per-session locks shared across requests.
 - **Usage and latency.** The API reports token counts for the current prompt and reply using the provider's usage, with LiteLLM's token counter as a fallback. Latency includes server work through the model or cache result. The app displays the measurements next to each reply.
+- **Safe retry.** Select **Retry** if the browser loses the reply. The browser resends the same turn with its original `Idempotency-Key`. Within a session, the backend returns the saved reply and metadata if that turn already committed. It returns 409 if a caller reuses the key for a different request. Retry records share the same SQLite storage as chat history.
 
 ## 4. Verification: how to see failover, cache hits and per-message token usage
 
@@ -87,6 +88,8 @@ python scripts/verify_contract.py http://localhost:8000 --origin http://localhos
 ```
 
 The first probe uses LiteLLM's test response. The live probe sends requests to Gemini with the configured keys. The HTTP verification script checks health, CORS, exact cache hits, per-request usage, failover, 422 and 503 responses, and multi-turn persistence.
+
+From `frontend`, run `npm ci`, `npx playwright install chromium`, and `npm run test:e2e` for the browser checks. The suite uses local fixtures to test dark mode, the mobile composer, reply metadata, reconnection, and safe retry without provider keys.
 
 ```sh
 python scripts/verify_contract.py https://lyftr-chat-api.onrender.com --origin https://lyfter-ai.vercel.app
