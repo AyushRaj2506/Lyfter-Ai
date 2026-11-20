@@ -52,7 +52,7 @@ class Settings:
         origins = csv(os.getenv("ALLOWED_ORIGINS", ",".join(LOCAL_ORIGINS)))
         keys = csv(os.getenv("LLM_API_KEYS", ""))
         return cls(
-            api_keys=tuple(key for key in keys if key not in PLACEHOLDER_KEYS),
+            api_keys=tuple(dict.fromkeys(key for key in keys if key not in PLACEHOLDER_KEYS)),
             model=os.getenv("LLM_MODEL", cls.model).strip(),
             database_path=Path(path),
             allowed_origins=tuple(origin.rstrip("/") for origin in origins),

@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { checkHealth, sendChat, type Metadata } from './api'
 import { createSessionId } from './session'
 
 type Message = { id: number; text: string } & (
-  | { role: 'user' | 'error' }
+  | { role: 'user' }
+  | { role: 'error'; failedDraft?: string }
   | { role: 'assistant'; metadata: Metadata }
 )
 
@@ -35,7 +38,19 @@ function MessageMeta({ metadata }: { metadata: Metadata }) {
   )
 }
 
-function ConversationMessage({ message }: { message: Message }) {
+const ReplyBody = memo(function ReplyBody({ text }: { text: string }) {
+  return (
+    <div className="reply-body">
+      <Markdown remarkPlugins={[remarkGfm]} components={{
+        a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+        img: ({ alt }) => <span>{alt || 'Image'}</span>,
+        table: ({ children }) => <div className="table-scroll"><table>{children}</table></div>,
+      }}>{text}</Markdown>
+    </div>
+  )
+})
+
+function ConversationMessage({ message, editDraft }: { message: Message; editDraft?: (text: string) => void }) {
   if (message.role === 'user') {
     return (
       <article className="message user-message" data-testid="user-message">
@@ -45,10 +60,16 @@ function ConversationMessage({ message }: { message: Message }) {
     )
   }
   if (message.role === 'error') {
+    const failedDraft = message.failedDraft
     return (
       <aside className="error-message" role="alert" data-testid="error-message">
         <span className="error-icon" aria-hidden="true">!</span>
         <span>{message.text}</span>
+        {failedDraft && editDraft && (
+          <button type="button" className="edit-message" onClick={() => editDraft(failedDraft)}>
+            Edit message
+          </button>
+        )}
       </aside>
     )
   }
@@ -56,7 +77,7 @@ function ConversationMessage({ message }: { message: Message }) {
     return (
       <article className="message assistant-message" data-testid="assistant-message">
         <header className="speaker"><span className="mini-mark" aria-hidden="true">✦</span> Lyftr</header>
-        <p className="message-text">{message.text}</p>
+        <ReplyBody text={message.text} />
         <MessageMeta metadata={message.metadata} />
       </article>
     )
@@ -68,27 +89,37 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
   const [systemPrompt, setSystemPrompt] = useState('')
+  const [savedPrompt, setSavedPrompt] = useState('')
   const [simulation, setSimulation] = useState('')
   const [pending, setPending] = useState(false)
   const [keyCount, setKeyCount] = useState<number | null | undefined>(undefined)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sessionCopied, setSessionCopied] = useState(false)
   const editor = useRef<HTMLTextAreaElement>(null)
-  const end = useRef<HTMLDivElement>(null)
+  const scrollArea = useRef<HTMLDivElement>(null)
+  const following = useRef(true)
   const inFlight = useRef(false)
   const messageId = useRef(0)
   const characterCount = Array.from(draft.trim()).length
 
   useEffect(() => {
     const controller = new AbortController()
-    checkHealth(controller.signal).then(setKeyCount).catch(() => {
-      if (!controller.signal.aborted) setKeyCount(null)
-    })
-    return () => controller.abort()
+    let retry: number
+    async function refreshHealth() {
+      const count = await checkHealth(controller.signal).catch(() => null)
+      if (controller.signal.aborted) return
+      setKeyCount(count)
+      if (count === null) retry = window.setTimeout(refreshHealth, 15000)
+    }
+    void refreshHealth()
+    return () => { controller.abort(); window.clearTimeout(retry) }
   }, [])
 
   useEffect(() => {
-    if (messages.length) end.current?.scrollIntoView({ block: 'nearest' })
+    const area = scrollArea.current
+    if (!area || !following.current || !messages.length) return
+    const last = area.querySelector('.conversation')?.lastElementChild
+    last?.scrollIntoView({ block: last.clientHeight > area.clientHeight ? 'start' : 'nearest' })
   }, [messages, pending])
 
   function startNewChat() {
@@ -97,8 +128,11 @@ export function App() {
     setMessages([])
     setDraft('')
     setSystemPrompt('')
+    setSavedPrompt('')
     setSimulation('')
     setSessionCopied(false)
+    setSettingsOpen(false)
+    following.current = true
     editor.current?.focus()
   }
 
@@ -111,13 +145,19 @@ export function App() {
     }
   }
 
-  function showError(text: string) {
+  function editDraft(text: string) {
+    setDraft(text)
+    editor.current?.focus()
+  }
+
+  function showError(text: string, failedDraft?: string) {
     const id = ++messageId.current
-    setMessages((current) => [...current, { id, role: 'error', text }])
+    setMessages((current) => [...current, { id, role: 'error', text, failedDraft }])
   }
 
   async function submit() {
     if (inFlight.current) return
+    following.current = true
     const text = draft.trim()
     setDraft('')
     if (!text) {
@@ -139,6 +179,7 @@ export function App() {
         ...(systemPrompt.trim() ? { system_prompt: systemPrompt } : {}),
       }
       const response = await sendChat(request, simulation)
+      if (systemPrompt.trim()) setSavedPrompt(systemPrompt)
       const replyId = ++messageId.current
       setMessages((current) => [...current, {
         id: replyId,
@@ -147,7 +188,7 @@ export function App() {
         metadata: response.metadata,
       }])
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'The message could not be sent.')
+      showError(error instanceof Error ? error.message : 'The message could not be sent.', text)
     } finally {
       inFlight.current = false
       setPending(false)
@@ -185,10 +226,12 @@ export function App() {
             rows={4}
             value={systemPrompt}
             onChange={(event) => setSystemPrompt(event.target.value)}
-            placeholder="Default assistant instructions"
+            placeholder={savedPrompt || 'Default assistant instructions'}
             aria-describedby="system-prompt-hint"
           />
-          <p id="system-prompt-hint" className="field-hint">Saved for this chat after a successful reply.</p>
+          <p id="system-prompt-hint" className="field-hint">
+            {savedPrompt && !systemPrompt.trim() ? 'Using the instructions saved for this chat.' : 'Saved for this chat after a successful reply.'}
+          </p>
 
           <label htmlFor="failure-mode">Simulate failure</label>
           <div className="select-field">
@@ -225,18 +268,22 @@ export function App() {
           </button>
         </header>
 
-        <div className="scroll-area">
+        <div className="scroll-area" ref={scrollArea} onScroll={(event) => {
+          const area = event.currentTarget
+          following.current = area.scrollHeight - area.scrollTop - area.clientHeight < 48
+        }}>
           {messages.length === 0 ? (
             <section className="empty-state" aria-labelledby="welcome-heading">
-              <div className="welcome-mark" aria-hidden="true">✦</div>
-              <h2 id="welcome-heading">What would you like to explore?</h2>
-              <p>Start a conversation. Each reply shows its source, speed, and token usage.</p>
+              <div className="welcome-panel">
+                <div className="welcome-copy">
+                  <h2 id="welcome-heading">What would you like to <em>explore?</em></h2>
+                  <p>Ask a question or try a prompt below.</p>
+                </div>
+                <div className="orbit" aria-hidden="true"><i /><i /><i /><b>✦</b></div>
+              </div>
               <div className="starter-prompts">
                 {starterPrompts.map(({ label, description, icon }) => (
-                  <button key={label} type="button" className="starter-prompt" onClick={() => {
-                    setDraft(description)
-                    editor.current?.focus()
-                  }}>
+                  <button key={label} type="button" className="starter-prompt" onClick={() => editDraft(description)}>
                     <span className={`starter-icon ${icon}`} aria-hidden="true" />
                     <strong>{label}</strong>
                     <span className="starter-description">{description}</span>
@@ -246,9 +293,10 @@ export function App() {
             </section>
           ) : (
             <section className="conversation" role="log" aria-label="Conversation messages" aria-live="polite">
-              {messages.map((message) => <ConversationMessage key={message.id} message={message} />)}
+              {messages.map((message) => (
+                <ConversationMessage key={message.id} message={message} editDraft={!draft && !pending ? editDraft : undefined} />
+              ))}
               {pending && <p className="typing" data-testid="typing-indicator">Waiting for a reply…</p>}
-              <div ref={end} />
             </section>
           )}
         </div>
@@ -273,7 +321,7 @@ export function App() {
                 }
               }}
             />
-            <button className="primary-button" data-testid="send-button" type="submit" disabled={pending}>Send</button>
+            <button className="primary-button" data-testid="send-button" type="submit" disabled={pending}>Send <span aria-hidden="true">↑</span></button>
           </div>
           <div className="composer-hint">
             <span id="composer-hint">Enter to send <span aria-hidden="true">·</span> Shift + Enter for a new line</span>

@@ -111,7 +111,7 @@ def create_app(settings: Settings | None = None, completion: Completion | None =
 
     @app.get("/health", response_model=HealthResponse, responses={503: {"model": HealthResponse}})
     def health(response: Response) -> HealthResponse:
-        healthy = db.ready() and bool(settings.api_keys)
+        healthy = db.ready() and len(settings.api_keys) >= 2 and litellm.cache is not None
         if not healthy:
             response.status_code = 503
         return HealthResponse(

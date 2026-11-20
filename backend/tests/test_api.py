@@ -18,7 +18,7 @@ HISTORY = "/sessions/s-test/messages"
 
 
 def test_config_ignores_placeholders_and_normalizes_key_pool_and_origins(monkeypatch):
-    monkeypatch.setenv("LLM_API_KEYS", " , first,replace_with_second_api_key,, second ")
+    monkeypatch.setenv("LLM_API_KEYS", " , first,replace_with_second_api_key,, second, first ")
     monkeypatch.setenv("ALLOWED_ORIGINS", "https://frontend.example/, , http://localhost:3000/")
     monkeypatch.setenv("ENABLE_FAILURE_SIMULATION", "TrUe")
     config = Settings.from_env()
@@ -32,6 +32,19 @@ def test_health_and_public_routes(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert set(paths) == {"/health", "/chat", "/sessions/{session_id}/messages"}
     assert paths["/chat"]["post"]["parameters"][0]["name"] == "X-Simulate-Failure"
+
+
+def test_health_rejects_incomplete_pool(settings, fake):
+    with TestClient(create_app(replace(settings, api_keys=("only-one",)), fake)) as client:
+        response = client.get("/health")
+        assert response.status_code == 503
+        assert response.json()["keys_configured"] == 1
+
+
+def test_health_checks_active_schema(client, settings):
+    with sqlite3.connect(settings.database_path) as connection:
+        connection.execute("ALTER TABLE messages RENAME TO old_messages")
+    assert client.get("/health").status_code == 503
 
 
 def test_health_degrades_without_keys_or_database(settings, fake):

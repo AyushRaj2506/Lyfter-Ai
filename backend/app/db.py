@@ -78,7 +78,7 @@ class Database:
     def ready(self) -> bool:
         if self.initialized and self.path.is_file():
             with suppress(sqlite3.Error), self.connect() as connection:
-                connection.execute("SELECT 1").fetchone()
+                connection.execute("SELECT id FROM messages JOIN sessions USING (session_id) LIMIT 1").fetchone()
                 return True
         return False
 
