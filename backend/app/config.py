@@ -23,7 +23,7 @@ def positive_int(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class Settings:
     api_keys: tuple[str, ...] = field(default=(), repr=False)
-    model: str = "gemini/gemini-3.1-flash-lite"
+    model: str = "gemini/gemini-3.5-flash-lite"
     database_path: Path = Path("data/app.db")
     allowed_origins: tuple[str, ...] = LOCAL_ORIGINS
     allowed_origin_regex: str | None = None

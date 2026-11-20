@@ -28,7 +28,7 @@ Open the backend health URL before the demo to wake the free Render instance. It
 
 ## 2. Run locally (with Docker and without)
 
-Copy `.env.example` to `.env` in the repository root and replace both `LLM_API_KEYS` placeholders. For Gemini, use keys from separate projects so their rate limits are independent. The default model is `gemini/gemini-3.1-flash-lite`. Confirm access with your keys using the live probe below. [Gemini model](https://aistudio.google.com/docs/models/gemini-3.1-flash-lite) · [Gemini rate limits](https://aistudio.google.com/docs/rate-limits)
+Copy `.env.example` to `.env` in the repository root and replace both `LLM_API_KEYS` placeholders. For Gemini, use keys from separate projects so their rate limits are independent. The default model is `gemini/gemini-3.5-flash-lite`. Confirm access with your keys using the live probe below. [Gemini model](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite) · [Gemini rate limits](https://aistudio.google.com/docs/rate-limits)
 
 ### With Docker
 
@@ -70,7 +70,7 @@ Open [localhost:5173](http://localhost:5173). To set a different backend URL, ex
 
 ## 3. Design decisions (key fallback, caching, SQLite session storage)
 
-- **Key fallback.** The gateway calls `litellm.completion` with zero SDK retries. A manual ordered loop starts at `key_1` every time and advances on provider errors, timeouts, or empty replies. This makes key IDs and fallback counts deterministic. Provider failures log the exception class, status code, and key ID. All keys failing returns JSON 503.
+- **Key fallback.** The gateway calls `litellm.completion` with zero SDK retries. A manual ordered loop starts at `key_1` every time and advances on provider errors, timeouts, or empty replies. This makes key IDs and fallback counts deterministic. Provider failures log the exception class, status code, and key ID. All keys failing returns JSON 503. The default timeout is 25 seconds per key. The Render deployment uses 40 seconds.
 - **Caching.** LiteLLM's exact-match local cache is enabled by default. The key uses the configured model and the exact message list, including the system prompt and history. A hit returns the cached text and usage, sets a null key ID and zero fallbacks, and measures fresh server latency. Simulated requests bypass reads so a cache hit cannot hide a key failure. Use `CACHE_TYPE=disk` to retain cache entries across restarts on a persistent volume. [LiteLLM caching](https://docs.litellm.ai/docs/proxy/caching)
 - **Session storage.** The browser generates a fresh session ID on page load and sends only new messages. The API reconstructs the model context with the stored system prompt and up to `MAX_HISTORY_MESSAGES` recent messages. SQLite keeps the full successful history. The system prompt and both messages are committed together after a successful reply. An unwritable configured SQLite location falls back to temporary storage and logs an error. A single Uvicorn worker keeps the in-memory cache and per-session locks shared across requests.
 - **Usage and latency.** The API reports token counts for the current prompt and reply using the provider's usage, with LiteLLM's token counter as a fallback. Latency includes server work through the model or cache result. The app displays the measurements next to each reply.
