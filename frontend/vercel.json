@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "VITE_API_BASE_URL=/api npm run build",
+  "rewrites": [
+    {
+      "source": "/api/health",
+      "destination": "https://lyftr-chat-api.onrender.com/health"
+    },
+    {
+      "source": "/api/chat",
+      "destination": "https://lyftr-chat-api.onrender.com/chat"
+    }
+  ]
+}

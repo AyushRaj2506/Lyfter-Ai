@@ -25,7 +25,7 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000')
   .replace(/\/+$/, '')
 
 export async function checkHealth(signal: AbortSignal) {
-  const response = await fetch(`${API_BASE}/health`, { signal })
+  const response = await fetch(`${API_BASE}/health`, { signal, cache: 'no-store' })
   if (!response.ok) return null
   const health = await response.json()
   return health.status === 'ok' && typeof health.keys_configured === 'number'

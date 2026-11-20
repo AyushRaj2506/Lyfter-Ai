@@ -23,7 +23,7 @@ Open the backend health URL before the demo to wake the free Render instance. It
 
 1. Push the source to a public GitHub repository. Keep `.env` private and commit only `.env.example`.
 2. Create a Render Docker web service from the repository. Use `backend` as its root directory, `./Dockerfile` in that directory, and `/health` as its health-check path. Set two real keys in `LLM_API_KEYS`, set `LLM_MODEL`, set `ENABLE_FAILURE_SIMULATION=true`, and set `DATABASE_URL=sqlite:////data/app.db`. Render supplies `PORT`. To keep history across redeploys, attach a persistent disk at `/data` that UID 10001 can write to. Free Render instances can cold-start and have ephemeral storage. [Render Docker](https://render.com/docs/docker) · [Persistent disks](https://render.com/docs/disks) · [Free-instance limits](https://render.com/docs/free)
-3. Import the repository into Vercel. Set the project root to `frontend`, choose Vite, and set `VITE_API_BASE_URL` to the public HTTPS backend URL before building. The build command is `npm run build` and the output directory is `dist`. [Vite on Vercel](https://vercel.com/docs/frameworks/frontend/vite)
+3. Import the repository into Vercel. Set the project root to `frontend` and choose Vite. The checked-in `vercel.json` builds the app with `VITE_API_BASE_URL=/api` and forwards the browser's health and chat requests to Render through the frontend domain. Update the two rewrite destinations if you deploy your own backend. [Vercel rewrites](https://vercel.com/docs/routing/rewrites)
 4. Set `ALLOWED_ORIGINS` on the backend to the public frontend origin and redeploy. Open both URLs in a signed-out browser, run the HTTP verification script with the deployed URLs, and record the demo.
 
 ## 2. Run locally: with Docker and without
