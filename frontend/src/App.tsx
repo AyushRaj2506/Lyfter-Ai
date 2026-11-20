@@ -12,15 +12,35 @@ type Message = { id: number; text: string } & (
 
 const starterPrompts = [
   { label: 'Explain a concept', description: 'What is response caching?', icon: 'book' },
-  { label: 'Try a memory test', description: 'Remember that my project is named Orion.', icon: 'memory' },
+  { label: 'Test chat memory', description: 'Remember that my project is named Orion.', icon: 'memory' },
   { label: 'Compare two ideas', description: 'How do retries and failover differ?', icon: 'compare' },
 ]
+
+function ThemeToggle() {
+  const [dark, setDark] = useState(() => document.documentElement.dataset.theme === 'dark')
+
+  function toggleTheme() {
+    const theme = dark ? 'light' : 'dark'
+    document.documentElement.dataset.theme = theme
+    setDark(!dark)
+    try { localStorage.setItem('lyftr-theme', theme) } catch {
+      // Keep the theme active for this page when storage is unavailable.
+    }
+  }
+
+  return (
+    <button type="button" className="theme-toggle" role="switch" aria-checked={dark} onClick={toggleTheme}>
+      <span className="theme-track" aria-hidden="true" />
+      Dark mode
+    </button>
+  )
+}
 
 function MessageMeta({ metadata }: { metadata: Metadata }) {
   return (
     <dl className="metadata" aria-label="Reply metadata">
       <div>
-        <dt>Source</dt>
+        <dt className="sr-only">Source</dt>
         <dd
           className={metadata.resolution_source === 'LLM_CACHE' ? 'source source-cache' : 'source'}
           data-testid="meta-source"
@@ -28,10 +48,17 @@ function MessageMeta({ metadata }: { metadata: Metadata }) {
           {metadata.resolution_source}
         </dd>
       </div>
-      <div><dt>Model</dt><dd data-testid="meta-model">{metadata.model}</dd></div>
-      <div><dt>Latency</dt><dd data-testid="meta-latency">{metadata.latency_ms} ms</dd></div>
-      <div><dt>Input tokens</dt><dd data-testid="meta-input-tokens">{metadata.input_tokens}</dd></div>
-      <div><dt>Output tokens</dt><dd data-testid="meta-output-tokens">{metadata.output_tokens}</dd></div>
+      <div><dt className="sr-only">Model</dt><dd data-testid="meta-model">{metadata.model}</dd></div>
+      <div><dt className="sr-only">Latency</dt><dd data-testid="meta-latency">{metadata.latency_ms} ms</dd></div>
+      <div className="token-usage">
+        <dt>Tokens</dt>
+        <dd>
+          <span className="sr-only">Input </span><span data-testid="meta-input-tokens">{metadata.input_tokens}</span>
+          <span aria-hidden="true"> in · </span>
+          <span className="sr-only">, output </span><span data-testid="meta-output-tokens">{metadata.output_tokens}</span>
+          <span aria-hidden="true"> out</span>
+        </dd>
+      </div>
       <div><dt>Key</dt><dd data-testid="meta-key-id">{metadata.key_id ?? '—'}</dd></div>
       <div><dt>Fallbacks</dt><dd data-testid="meta-fallbacks">{metadata.fallback_attempts}</dd></div>
     </dl>
@@ -53,8 +80,7 @@ const ReplyBody = memo(function ReplyBody({ text }: { text: string }) {
 function ConversationMessage({ message, editDraft }: { message: Message; editDraft?: (text: string) => void }) {
   if (message.role === 'user') {
     return (
-      <article className="message user-message" data-testid="user-message">
-        <span className="speaker">You</span>
+      <article className="message user-message" aria-label="Your message" data-testid="user-message">
         <p className="message-text">{message.text}</p>
       </article>
     )
@@ -64,7 +90,7 @@ function ConversationMessage({ message, editDraft }: { message: Message; editDra
     return (
       <aside className="error-message" role="alert" data-testid="error-message">
         <span className="error-icon" aria-hidden="true">!</span>
-        <span>{message.text}</span>
+        <span className="error-text">{message.text}</span>
         {failedDraft && editDraft && (
           <button type="button" className="edit-message" onClick={() => editDraft(failedDraft)}>
             Edit message
@@ -75,9 +101,11 @@ function ConversationMessage({ message, editDraft }: { message: Message; editDra
   }
   if (message.role === 'assistant') {
     return (
-      <article className="message assistant-message" data-testid="assistant-message">
-        <header className="speaker"><span className="mini-mark" aria-hidden="true">✦</span> Lyftr</header>
-        <ReplyBody text={message.text} />
+      <article className="assistant-message" data-testid="assistant-message">
+        <div className="message assistant-bubble">
+          <header className="speaker"><span className="mini-mark" aria-hidden="true">✦</span> Lyftr</header>
+          <ReplyBody text={message.text} />
+        </div>
         <MessageMeta metadata={message.metadata} />
       </article>
     )
@@ -88,6 +116,7 @@ export function App() {
   const [sessionId, setSessionId] = useState(createSessionId)
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
+  const [emptyHint, setEmptyHint] = useState(false)
   const [systemPrompt, setSystemPrompt] = useState('')
   const [savedPrompt, setSavedPrompt] = useState('')
   const [simulation, setSimulation] = useState('')
@@ -127,6 +156,7 @@ export function App() {
     setSessionId(createSessionId())
     setMessages([])
     setDraft('')
+    setEmptyHint(false)
     setSystemPrompt('')
     setSavedPrompt('')
     setSimulation('')
@@ -147,6 +177,7 @@ export function App() {
 
   function editDraft(text: string) {
     setDraft(text)
+    setEmptyHint(false)
     editor.current?.focus()
   }
 
@@ -157,15 +188,16 @@ export function App() {
 
   async function submit() {
     if (inFlight.current) return
-    following.current = true
     const text = draft.trim()
-    setDraft('')
     if (!text) {
-      showError('Enter a message to start chatting.')
+      setEmptyHint(true)
       editor.current?.focus()
       return
     }
 
+    following.current = true
+    setDraft('')
+    setEmptyHint(false)
     inFlight.current = true
     setPending(true)
     setSimulation('')
@@ -226,11 +258,11 @@ export function App() {
             rows={4}
             value={systemPrompt}
             onChange={(event) => setSystemPrompt(event.target.value)}
-            placeholder={savedPrompt || 'Default assistant instructions'}
+            placeholder={savedPrompt || 'e.g. Keep replies brief'}
             aria-describedby="system-prompt-hint"
           />
           <p id="system-prompt-hint" className="field-hint">
-            {savedPrompt && !systemPrompt.trim() ? 'Using the instructions saved for this chat.' : 'Saved for this chat after a successful reply.'}
+            {savedPrompt && !systemPrompt.trim() ? 'Using the saved prompt.' : 'Saved when the assistant replies.'}
           </p>
 
           <label htmlFor="failure-mode">Simulate failure</label>
@@ -242,12 +274,12 @@ export function App() {
               <option value="*=429">All keys · Rate limit (429)</option>
             </select>
           </div>
-          <p className="field-hint">Applies to the next message only.</p>
+          <p className="field-hint">Only affects your next message.</p>
         </div>
 
         <div className="sidebar-footer">
           <span className={typeof keyCount === 'number' ? 'status-dot ready' : 'status-dot'} aria-hidden="true" />
-          <span>
+          <span role="status">
             {keyCount === undefined ? 'Checking API' : keyCount === null ? 'API unavailable' : 'API connected'}
           </span>
           {typeof keyCount === 'number' && <span className="key-count">{keyCount} {keyCount === 1 ? 'key' : 'keys'}</span>}
@@ -257,15 +289,18 @@ export function App() {
       <main className="workspace">
         <header className="workspace-header">
           <h1>Conversation</h1>
-          <button
-            type="button"
-            className="session-id"
-            aria-label={sessionCopied ? 'Session ID copied' : 'Copy full session ID'}
-            title={sessionId}
-            onClick={() => void copySession()}
-          >
-            {sessionCopied ? 'Copied' : 'Session'} <code>{sessionId.slice(0, 10)}</code>
-          </button>
+          <div className="workspace-actions">
+            <button
+              type="button"
+              className="session-id"
+              aria-label={sessionCopied ? 'Session ID copied' : 'Copy full session ID'}
+              title={sessionId}
+              onClick={() => void copySession()}
+            >
+              {sessionCopied ? 'Copied' : 'Copy ID'} <code>{sessionId.slice(0, 10)}</code>
+            </button>
+            <ThemeToggle />
+          </div>
         </header>
 
         <div className="scroll-area" ref={scrollArea} onScroll={(event) => {
@@ -277,7 +312,7 @@ export function App() {
               <div className="welcome-panel">
                 <div className="welcome-copy">
                   <h2 id="welcome-heading">What would you like to <em>explore?</em></h2>
-                  <p>Ask a question or try a prompt below.</p>
+                  <p>Ask a question or try a prompt.</p>
                 </div>
                 <div className="orbit" aria-hidden="true"><i /><i /><i /><b>✦</b></div>
               </div>
@@ -308,11 +343,14 @@ export function App() {
               id="chat-message"
               data-testid="chat-input"
               ref={editor}
-              rows={2}
-              placeholder="Type a message…"
+              rows={1}
+              placeholder="Message Lyftr…"
               aria-describedby="composer-hint character-count"
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                setDraft(event.target.value)
+                if (emptyHint) setEmptyHint(false)
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing
                   && event.nativeEvent.keyCode !== 229) {
@@ -321,10 +359,14 @@ export function App() {
                 }
               }}
             />
-            <button className="primary-button" data-testid="send-button" type="submit" disabled={pending}>Send <span aria-hidden="true">↑</span></button>
+            <button className="primary-button send-button" data-testid="send-button" type="submit" disabled={pending || characterCount === 0}>
+              Send <span aria-hidden="true">↑</span>
+            </button>
           </div>
           <div className="composer-hint">
-            <span id="composer-hint">Enter to send <span aria-hidden="true">·</span> Shift + Enter for a new line</span>
+            <span id="composer-hint" className={emptyHint ? 'over-limit' : undefined} aria-live="polite">
+              {emptyHint ? 'Enter a message to send.' : 'Enter to send · Shift + Enter for a new line'}
+            </span>
             <span id="character-count" className={characterCount > 4000 ? 'over-limit' : ''}>
               {characterCount.toLocaleString('en-US')} / 4,000
             </span>

@@ -2,10 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#151a2d" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <title>Lyftr Chat</title>
+    <script>
+      {
+        const root = document.documentElement
+        root.dataset.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        try {
+          const savedTheme = localStorage.getItem('lyftr-theme')
+          if (savedTheme === 'light' || savedTheme === 'dark') root.dataset.theme = savedTheme
+        } catch {}
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
