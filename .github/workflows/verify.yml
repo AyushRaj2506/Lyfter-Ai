@@ -1,0 +1,64 @@
+name: Verify assignment
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run backend tests and LiteLLM cache probe
+        run: |
+          python -m pip install -r backend/requirements-dev.txt
+          python -m pytest -q backend
+          python backend/litellm_spike.py
+      - name: Build and start the stack with Compose
+        run: |
+          cp .env.example .env
+          # These fixture keys are only used for readiness and simulated failures.
+          sed -i 's/^LLM_API_KEYS=.*/LLM_API_KEYS=fixture-key-one,fixture-key-two/' .env
+          make up
+          curl --fail --retry 12 --retry-all-errors --retry-delay 2 http://localhost:8000/health
+          curl --fail --retry 12 --retry-all-errors --retry-delay 2 http://localhost:3000 | grep -q 'Lyftr Chat'
+          code=$(curl --silent --show-error --output failure.json --write-out '%{http_code}' \
+            --header 'Content-Type: application/json' --header 'X-Simulate-Failure: *=429' \
+            --data '{"session_id":"ci-failure","message":"Hello"}' http://localhost:8000/chat)
+          test "$code" = 503
+          python -c 'import json; assert json.load(open("failure.json")) == {"detail": "all providers unavailable"}'
+      - name: Check SQLite survives a Compose restart
+        run: |
+          docker compose exec -T backend python - <<'PY'
+          from pathlib import Path
+          from app.db import Database
+          from app.schemas import Metadata
+
+          path = Path("/data/app.db")
+          assert path.is_file()
+          Database(path).save_turn(
+              "ci-volume", "Assist.", "Hello", "Hi.",
+              Metadata(resolution_source="LIVE_INFERENCE", model="test", latency_ms=1,
+                       input_tokens=1, output_tokens=1, key_id="key_1", fallback_attempts=0),
+          )
+          PY
+          make down
+          make up
+          curl --fail --retry 12 --retry-all-errors --retry-delay 2 \
+            http://localhost:8000/sessions/ci-volume/messages | python -c \
+            'import json, sys; messages = json.load(sys.stdin)["messages"]; assert [m["role"] for m in messages] == ["user", "assistant"]; assert messages[1]["content"] == "Hi."'
+      - name: Show Compose logs on failure
+        if: failure()
+        run: test ! -f .env || docker compose logs
+      - name: Stop Compose
+        if: always()
+        run: test ! -f .env || make clean
