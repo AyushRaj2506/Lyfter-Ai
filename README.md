@@ -10,6 +10,7 @@ React and FastAPI chatbot with per-session SQLite history, ordered LiteLLM key f
 | Backend health | [lyftr-chat-api.onrender.com/health](https://lyftr-chat-api.onrender.com/health) |
 | Interactive API docs | [lyftr-chat-api.onrender.com/docs](https://lyftr-chat-api.onrender.com/docs) |
 | Public repository | [AyushRaj2506/Lyfter-Ai](https://github.com/AyushRaj2506/Lyfter-Ai) |
+| Narrated demo | [Download the 2:06 walkthrough (MP4)](demo/lyftr-chat-demo.mp4?raw=true) |
 
 Open the backend health URL before the demo to wake the free Render instance. Its SQLite file is ephemeral across service restarts. The local Docker volume preserves history across restarts. [Render free-instance limits](https://render.com/docs/free)
 
